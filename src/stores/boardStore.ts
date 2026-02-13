@@ -42,7 +42,7 @@ interface BoardStore {
   pasteElements: () => void;
 
   // Helper methods
-  addImage: (dataUrl: string, width: number, height: number) => void;
+  addImage: (dataUrl: string, width: number, height: number, positionOffset?: { x: number; y: number }) => void;
   addVideo: (dataUrl: string, width: number, height: number, duration: number) => void;
   addGif: (dataUrl: string, width: number, height: number, config: GifElement['gifConfig']) => void;
   getSelectedElements: () => CanvasElement[];
@@ -176,7 +176,7 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   },
 
   // Helper methods
-  addImage: (dataUrl, width, height) => {
+  addImage: (dataUrl, width, height, positionOffset) => {
     const { elements, viewport } = get();
     const maxZIndex = elements.length > 0 ? Math.max(...elements.map((e) => e.zIndex)) : 0;
     
@@ -187,7 +187,7 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
     // Scale down if image is too large
     let displayWidth = width;
     let displayHeight = height;
-    const maxSize = Math.min(canvasWidth, canvasHeight) * 0.6;
+    const maxSize = Math.min(canvasWidth, canvasHeight) * 0.4;
     
     if (width > maxSize || height > maxSize) {
       const scale = maxSize / Math.max(width, height);
@@ -195,11 +195,15 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
       displayHeight = height * scale;
     }
     
+    // Apply position offset if provided (for batch upload)
+    const offsetX = positionOffset?.x ?? 0;
+    const offsetY = positionOffset?.y ?? 0;
+    
     const element: ImageElement = {
       id: uuidv4(),
       type: 'image',
-      x: (canvasWidth / 2 - displayWidth / 2 - viewport.x) / viewport.zoom,
-      y: (canvasHeight / 2 - displayHeight / 2 - viewport.y) / viewport.zoom,
+      x: (canvasWidth / 2 - displayWidth / 2 - viewport.x) / viewport.zoom + offsetX,
+      y: (canvasHeight / 2 - displayHeight / 2 - viewport.y) / viewport.zoom + offsetY,
       width: displayWidth,
       height: displayHeight,
       rotation: 0,
@@ -212,7 +216,7 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
     };
 
     get().addElement(element);
-    set({ selectedIds: [element.id] });
+    return element;
   },
 
   addVideo: (dataUrl, width, height, duration) => {

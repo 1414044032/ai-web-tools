@@ -1,8 +1,23 @@
 {
   "name": "ai-web-tools",
-  "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "A modern Canvas-based web tool for image/video editing and video-to-GIF conversion, fully frontend-based without backend dependencies.",
   "type": "module",
+  "author": "wangliuqi",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wangliuqi/ai-web-tools"
+  },
+  "keywords": [
+    "canvas",
+    "image-editor",
+    "video-to-gif",
+    "ffmpeg",
+    "react",
+    "typescript",
+    "vite"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
