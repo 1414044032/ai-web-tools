@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useBoardStore } from '@/stores';
 import type { CanvasElement, TransformState, ResizeHandle } from '@/types';
-import { isPointInRotatedRect, getAngle, clamp, rotatePoint, getElementCenter } from '@/utils';
+import { isPointInRotatedRect, getAngle, clamp, rotatePoint, getElementCenter, getRotatedBoundingBox } from '@/utils';
 
 interface CanvasBoardProps {
   children?: React.ReactNode;
@@ -12,6 +12,14 @@ const MAX_ZOOM = 5;
 const HANDLE_SIZE = 10;
 const ROTATION_HANDLE_OFFSET = 30;
 
+// Selection box state
+interface SelectionBox {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+}
+
 export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const {
@@ -20,6 +28,7 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
     elements,
     selectedIds,
     selectElement,
+    setSelectedIds,
     clearSelection,
     updateElement,
     pushHistory,
@@ -29,6 +38,7 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [transformState, setTransformState] = useState<TransformState | null>(null);
   const [activeElementId, setActiveElementId] = useState<string | null>(null);
+  const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
 
   // Convert screen coordinates to canvas coordinates
   const screenToCanvas = useCallback(
@@ -155,12 +165,19 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
         });
         pushHistory();
       } else {
-        // Start panning or clear selection
+        // Start panning or start selection box
         if (e.button === 1 || (e.button === 0 && e.altKey)) {
           setIsPanning(true);
           setPanStart({ x: mouseX - viewport.x, y: mouseY - viewport.y });
         } else {
+          // Start selection box
           clearSelection();
+          setSelectionBox({
+            startX: mouseX,
+            startY: mouseY,
+            currentX: mouseX,
+            currentY: mouseY,
+          });
         }
       }
     },
@@ -180,6 +197,16 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
         setViewport({
           x: mouseX - panStart.x,
           y: mouseY - panStart.y,
+        });
+        return;
+      }
+
+      // Update selection box
+      if (selectionBox) {
+        setSelectionBox({
+          ...selectionBox,
+          currentX: mouseX,
+          currentY: mouseY,
         });
         return;
       }
@@ -208,11 +235,11 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
         } else if (transformState.isRotating) {
           const centerX =
             (transformState.startTransform.x + transformState.startTransform.width / 2) *
-              viewport.zoom +
+            viewport.zoom +
             viewport.x;
           const centerY =
             (transformState.startTransform.y + transformState.startTransform.height / 2) *
-              viewport.zoom +
+            viewport.zoom +
             viewport.y;
           const startAngle = getAngle(
             centerX,
@@ -232,15 +259,57 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
         }
       }
     },
-    [isPanning, panStart, transformState, activeElementId, viewport, elements, setViewport, updateElement]
+    [isPanning, panStart, transformState, activeElementId, viewport, elements, setViewport, updateElement, selectionBox]
   );
 
   // Handle mouse up
   const handleMouseUp = useCallback(() => {
+    // Complete selection box and select elements
+    if (selectionBox) {
+      const boxLeft = Math.min(selectionBox.startX, selectionBox.currentX);
+      const boxRight = Math.max(selectionBox.startX, selectionBox.currentX);
+      const boxTop = Math.min(selectionBox.startY, selectionBox.currentY);
+      const boxBottom = Math.max(selectionBox.startY, selectionBox.currentY);
+
+      // Only select if the box is large enough (more than 5px)
+      if (boxRight - boxLeft > 5 || boxBottom - boxTop > 5) {
+        const selectedElements = elements.filter((element) => {
+          // Get element bounding box in screen coordinates
+          const bbox = getRotatedBoundingBox(
+            element.x,
+            element.y,
+            element.width,
+            element.height,
+            element.rotation
+          );
+
+          // Convert to screen coordinates
+          const screenMinX = bbox.minX * viewport.zoom + viewport.x;
+          const screenMaxX = bbox.maxX * viewport.zoom + viewport.x;
+          const screenMinY = bbox.minY * viewport.zoom + viewport.y;
+          const screenMaxY = bbox.maxY * viewport.zoom + viewport.y;
+
+          // Check if element intersects with selection box
+          return !(
+            screenMaxX < boxLeft ||
+            screenMinX > boxRight ||
+            screenMaxY < boxTop ||
+            screenMinY > boxBottom
+          );
+        });
+
+        if (selectedElements.length > 0) {
+          setSelectedIds(selectedElements.map((el) => el.id));
+        }
+      }
+
+      setSelectionBox(null);
+    }
+
     setIsPanning(false);
     setTransformState(null);
     setActiveElementId(null);
-  }, []);
+  }, [selectionBox, elements, viewport, setSelectedIds]);
 
   // Add wheel listener
   useEffect(() => {
@@ -254,6 +323,7 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
   // Add global mouse up listener to handle mouse up outside container
   useEffect(() => {
     const handleGlobalMouseUp = () => {
+      setSelectionBox(null);
       setIsPanning(false);
       setTransformState(null);
       setActiveElementId(null);
@@ -272,8 +342,32 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
     if (transformState?.isDragging) return 'move';
     if (transformState?.isResizing) return 'nwse-resize';
     if (transformState?.isRotating) return 'grab';
+    if (selectionBox) return 'crosshair';
     return 'default';
   };
+
+  // Calculate selection box rect
+  const getSelectionBoxStyle = (): React.CSSProperties | null => {
+    if (!selectionBox) return null;
+
+    const left = Math.min(selectionBox.startX, selectionBox.currentX);
+    const top = Math.min(selectionBox.startY, selectionBox.currentY);
+    const width = Math.abs(selectionBox.currentX - selectionBox.startX);
+    const height = Math.abs(selectionBox.currentY - selectionBox.startY);
+
+    return {
+      position: 'absolute',
+      left,
+      top,
+      width,
+      height,
+      border: '1px solid #3b82f6',
+      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+      pointerEvents: 'none',
+    };
+  };
+
+  const selectionBoxStyle = getSelectionBoxStyle();
 
   return (
     <div
@@ -303,6 +397,9 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
           />
         ))}
       </div>
+
+      {/* Selection box */}
+      {selectionBoxStyle && <div style={selectionBoxStyle} />}
     </div>
   );
 };
@@ -325,6 +422,15 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({ element, isSelected, 
     transformOrigin: 'center center',
   };
 
+  // Type label config
+  const typeLabels: Record<string, { label: string; icon: string }> = {
+    image: { label: '图片', icon: '🖼️' },
+    video: { label: '视频', icon: '🎬' },
+    gif: { label: 'GIF', icon: '✨' },
+  };
+
+  const typeInfo = typeLabels[element.type] || { label: element.type, icon: '📄' };
+
   return (
     <div style={style} className="group">
       {/* Element content */}
@@ -332,14 +438,14 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({ element, isSelected, 
         <img
           src={element.dataUrl}
           alt=""
-          className="w-full h-full object-cover pointer-events-none select-none"
+          className="w-full h-full pointer-events-none select-none"
           draggable={false}
         />
       )}
       {element.type === 'video' && (
         <video
           src={element.dataUrl}
-          className="w-full h-full object-cover pointer-events-none select-none"
+          className="w-full h-full pointer-events-none select-none"
           muted
           loop
         />
@@ -348,10 +454,26 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({ element, isSelected, 
         <img
           src={element.dataUrl}
           alt=""
-          className="w-full h-full object-cover pointer-events-none select-none"
+          className="w-full h-full pointer-events-none select-none"
           draggable={false}
         />
       )}
+
+      {/* Type label */}
+      <div
+        className="absolute pointer-events-none flex items-center gap-1 bg-black/60 text-white px-1.5 py-0.5 rounded text-xs font-medium backdrop-blur-sm"
+        style={{
+          left: 4 / zoom,
+          top: 4 / zoom,
+          fontSize: 10 / zoom,
+          padding: `${2 / zoom}px ${6 / zoom}px`,
+          borderRadius: 4 / zoom,
+          gap: 2 / zoom,
+        }}
+      >
+        <span>{typeInfo.icon}</span>
+        <span>{typeInfo.label}</span>
+      </div>
 
       {/* Selection border and handles */}
       {isSelected && (
@@ -440,7 +562,7 @@ function getHandleAtPoint(
   viewport: { x: number; y: number; zoom: number }
 ): ResizeHandle | 'rotate' | null {
   const { zoom } = viewport;
-  
+
   // Calculate element center in screen coordinates
   const elementCenterCanvas = getElementCenter(element.x, element.y, element.width, element.height);
   const elementCenterScreen = {

@@ -9,6 +9,66 @@ import type {
   GifElement,
 } from '@/types';
 
+// Find an empty position on the canvas that doesn't overlap with existing elements
+function findEmptyPosition(
+  elements: CanvasElement[],
+  width: number,
+  height: number,
+  viewport: Viewport,
+  referenceElement?: CanvasElement
+): { x: number; y: number } {
+  const GAP = 20; // Gap between elements
+
+  // If there's a reference element, try to place next to it
+  if (referenceElement) {
+    const rightX = referenceElement.x + referenceElement.width + GAP;
+    const rightY = referenceElement.y;
+
+    // Check if this position is empty
+    const hasCollision = elements.some((el) => {
+      if (el.id === referenceElement.id) return false;
+      return !(
+        rightX + width < el.x ||
+        rightX > el.x + el.width ||
+        rightY + height < el.y ||
+        rightY > el.y + el.height
+      );
+    });
+
+    if (!hasCollision) {
+      return { x: rightX, y: rightY };
+    }
+  }
+
+  // Find the rightmost element
+  let maxRightX = -Infinity;
+  let rightmostElement: CanvasElement | null = null;
+
+  for (const el of elements) {
+    const rightEdge = el.x + el.width;
+    if (rightEdge > maxRightX) {
+      maxRightX = rightEdge;
+      rightmostElement = el;
+    }
+  }
+
+  // If no elements exist, place in center
+  if (!rightmostElement) {
+    const canvasWidth = window.innerWidth;
+    const canvasHeight = window.innerHeight;
+    return {
+      x: (canvasWidth / 2 - width / 2 - viewport.x) / viewport.zoom,
+      y: (canvasHeight / 2 - height / 2 - viewport.y) / viewport.zoom,
+    };
+  }
+
+  // Place to the right of the rightmost element
+  return {
+    x: maxRightX + GAP,
+    y: rightmostElement.y,
+  };
+}
+
 interface BoardStore {
   // Viewport
   viewport: Viewport;
@@ -42,7 +102,7 @@ interface BoardStore {
   pasteElements: () => void;
 
   // Helper methods
-  addImage: (dataUrl: string, width: number, height: number, positionOffset?: { x: number; y: number }) => void;
+  addImage: (dataUrl: string, width: number, height: number, positionOffset?: { x: number; y: number }, referenceElement?: CanvasElement) => ImageElement;
   addVideo: (dataUrl: string, width: number, height: number, duration: number) => void;
   addGif: (dataUrl: string, width: number, height: number, config: GifElement['gifConfig']) => void;
   getSelectedElements: () => CanvasElement[];
@@ -84,7 +144,7 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   updateElement: (id, updates) =>
     set((state) => ({
       elements: state.elements.map((el) =>
-        el.id === id ? { ...el, ...updates, updatedAt: Date.now() } : el
+        el.id === id ? ({ ...el, ...updates, updatedAt: Date.now() } as typeof el) : el
       ),
     })),
   deleteElements: (ids) =>
@@ -176,34 +236,49 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   },
 
   // Helper methods
-  addImage: (dataUrl, width, height, positionOffset) => {
+  addImage: (dataUrl, width, height, positionOffset, referenceElement) => {
     const { elements, viewport } = get();
     const maxZIndex = elements.length > 0 ? Math.max(...elements.map((e) => e.zIndex)) : 0;
-    
+
     // Calculate position to center in viewport
     const canvasWidth = window.innerWidth;
     const canvasHeight = window.innerHeight;
-    
+
     // Scale down if image is too large
     let displayWidth = width;
     let displayHeight = height;
-    const maxSize = Math.min(canvasWidth, canvasHeight) * 0.4;
-    
+    const maxSize = Math.min(canvasWidth, canvasHeight) * 0.7;
+
     if (width > maxSize || height > maxSize) {
       const scale = maxSize / Math.max(width, height);
       displayWidth = width * scale;
       displayHeight = height * scale;
     }
-    
-    // Apply position offset if provided (for batch upload)
-    const offsetX = positionOffset?.x ?? 0;
-    const offsetY = positionOffset?.y ?? 0;
-    
+
+    // Calculate position
+    let x: number;
+    let y: number;
+
+    if (positionOffset) {
+      // Apply position offset if provided (for batch upload)
+      x = (canvasWidth / 2 - displayWidth / 2 - viewport.x) / viewport.zoom + positionOffset.x;
+      y = (canvasHeight / 2 - displayHeight / 2 - viewport.y) / viewport.zoom + positionOffset.y;
+    } else if (referenceElement) {
+      // Find empty position relative to reference element
+      const pos = findEmptyPosition(elements, displayWidth, displayHeight, viewport, referenceElement);
+      x = pos.x;
+      y = pos.y;
+    } else {
+      // Default: center in viewport
+      x = (canvasWidth / 2 - displayWidth / 2 - viewport.x) / viewport.zoom;
+      y = (canvasHeight / 2 - displayHeight / 2 - viewport.y) / viewport.zoom;
+    }
+
     const element: ImageElement = {
       id: uuidv4(),
       type: 'image',
-      x: (canvasWidth / 2 - displayWidth / 2 - viewport.x) / viewport.zoom + offsetX,
-      y: (canvasHeight / 2 - displayHeight / 2 - viewport.y) / viewport.zoom + offsetY,
+      x,
+      y,
       width: displayWidth,
       height: displayHeight,
       rotation: 0,
@@ -222,20 +297,20 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   addVideo: (dataUrl, width, height, duration) => {
     const { elements, viewport } = get();
     const maxZIndex = elements.length > 0 ? Math.max(...elements.map((e) => e.zIndex)) : 0;
-    
+
     const canvasWidth = window.innerWidth;
     const canvasHeight = window.innerHeight;
-    
+
     let displayWidth = width;
     let displayHeight = height;
-    const maxSize = Math.min(canvasWidth, canvasHeight) * 0.6;
-    
+    const maxSize = Math.min(canvasWidth, canvasHeight) * 0.7;
+
     if (width > maxSize || height > maxSize) {
       const scale = maxSize / Math.max(width, height);
       displayWidth = width * scale;
       displayHeight = height * scale;
     }
-    
+
     const element: VideoElement = {
       id: uuidv4(),
       type: 'video',
@@ -260,20 +335,20 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
   addGif: (dataUrl, width, height, config) => {
     const { elements, viewport } = get();
     const maxZIndex = elements.length > 0 ? Math.max(...elements.map((e) => e.zIndex)) : 0;
-    
+
     const canvasWidth = window.innerWidth;
     const canvasHeight = window.innerHeight;
-    
+
     let displayWidth = width;
     let displayHeight = height;
     const maxSize = Math.min(canvasWidth, canvasHeight) * 0.6;
-    
+
     if (width > maxSize || height > maxSize) {
       const scale = maxSize / Math.max(width, height);
       displayWidth = width * scale;
       displayHeight = height * scale;
     }
-    
+
     const element: GifElement = {
       id: uuidv4(),
       type: 'gif',

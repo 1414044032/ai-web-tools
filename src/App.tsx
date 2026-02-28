@@ -1,6 +1,6 @@
 import { CanvasBoard, ZoomControls } from './components/Board';
 import { Toolbar } from './components/Toolbar';
-import { VideoToGifPanel, ToastContainer, LoadingOverlay } from './components/Panels';
+import { VideoSidePanel, ImageSidePanel, ToastContainer, LoadingOverlay } from './components/Panels';
 import { useKeyboard, useStorage } from './hooks';
 
 function App() {
@@ -21,8 +21,11 @@ function App() {
       {/* Zoom Controls */}
       <ZoomControls />
 
-      {/* Video to GIF Panel */}
-      <VideoToGifPanel />
+      {/* Video Side Panel (shows when video is selected) */}
+      <VideoSidePanel />
+
+      {/* Image Side Panel (shows when images are selected) */}
+      <ImageSidePanel />
 
       {/* Toast Notifications */}
       <ToastContainer />
