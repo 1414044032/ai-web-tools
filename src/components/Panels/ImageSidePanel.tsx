@@ -1,11 +1,17 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useBoardStore, useUIStore } from '@/stores';
+import { getRotatedBoundingBox } from '@/utils';
+import { ImageCropModal } from './ImageCropModal';
 import type { ImageElement } from '@/types';
 
 export const ImageSidePanel: React.FC = () => {
   const { selectedIds, elements, addImage } = useBoardStore();
   const { addToast, setLoading } = useUIStore();
+
+  // Crop modal state
+  const [showCropModal, setShowCropModal] = useState(false);
+  const [cropImage, setCropImage] = useState<ImageElement | null>(null);
 
   // Get selected image elements
   const selectedImages = selectedIds
@@ -21,6 +27,25 @@ export const ImageSidePanel: React.FC = () => {
   // Don't show if videos are selected (VideoSidePanel handles that)
   const shouldShow = hasSelectedImages && !hasSelectedVideos;
 
+  // Open crop modal
+  const openCropModal = useCallback((img: ImageElement) => {
+    setCropImage(img);
+    setShowCropModal(true);
+  }, []);
+
+  // Handle crop result
+  const handleCrop = useCallback((dataUrl: string, width: number, height: number) => {
+    if (!cropImage) return;
+
+    // Add the cropped image as a new element
+    const element = addImage(dataUrl, width, height, undefined, cropImage);
+
+    if (element) {
+      useBoardStore.getState().setSelectedIds([element.id]);
+      addToast({ type: 'success', message: '裁剪成功，已生成新图片' });
+    }
+  }, [cropImage, addImage, addToast]);
+
   // Merge multiple images into one
   const mergeImages = useCallback(async () => {
     if (selectedImages.length < 2) {
@@ -31,21 +56,23 @@ export const ImageSidePanel: React.FC = () => {
     try {
       setLoading(true, '正在合并图片...');
 
-      // Calculate bounding box of all selected images
+      // Calculate bounding box of all selected images (considering rotation)
       let minX = Infinity;
       let minY = Infinity;
       let maxX = -Infinity;
       let maxY = -Infinity;
 
       for (const img of selectedImages) {
-        minX = Math.min(minX, img.x);
-        minY = Math.min(minY, img.y);
-        maxX = Math.max(maxX, img.x + img.width);
-        maxY = Math.max(maxY, img.y + img.height);
+        // Get the actual bounding box after rotation
+        const bbox = getRotatedBoundingBox(img.x, img.y, img.width, img.height, img.rotation);
+        minX = Math.min(minX, bbox.minX);
+        minY = Math.min(minY, bbox.minY);
+        maxX = Math.max(maxX, bbox.maxX);
+        maxY = Math.max(maxY, bbox.maxY);
       }
 
-      const mergedWidth = maxX - minX;
-      const mergedHeight = maxY - minY;
+      const mergedWidth = Math.ceil(maxX - minX);
+      const mergedHeight = Math.ceil(maxY - minY);
 
       // Create a canvas to merge images
       const canvas = document.createElement('canvas');
@@ -68,24 +95,19 @@ export const ImageSidePanel: React.FC = () => {
         await new Promise<void>((resolve, reject) => {
           const image = new Image();
           image.onload = () => {
-            // Calculate position relative to the bounding box
-            const relativeX = img.x - minX;
-            const relativeY = img.y - minY;
+            // Calculate the center of the image relative to the bounding box
+            const imgCenterX = img.x + img.width / 2 - minX;
+            const imgCenterY = img.y + img.height / 2 - minY;
 
             // Save context state
             ctx.save();
 
-            // Apply rotation if needed
-            if (img.rotation !== 0) {
-              const centerX = relativeX + img.width / 2;
-              const centerY = relativeY + img.height / 2;
-              ctx.translate(centerX, centerY);
-              ctx.rotate((img.rotation * Math.PI) / 180);
-              ctx.translate(-centerX, -centerY);
-            }
+            // Move to image center, rotate, then draw
+            ctx.translate(imgCenterX, imgCenterY);
+            ctx.rotate((img.rotation * Math.PI) / 180);
 
-            // Draw the image
-            ctx.drawImage(image, relativeX, relativeY, img.width, img.height);
+            // Draw the image centered at origin
+            ctx.drawImage(image, -img.width / 2, -img.height / 2, img.width, img.height);
 
             // Restore context state
             ctx.restore();
@@ -185,121 +207,156 @@ export const ImageSidePanel: React.FC = () => {
   const formatSize = (size: number) => Math.round(size);
 
   return (
-    <AnimatePresence>
-      {shouldShow && (
-        <motion.div
-          initial={{ x: '100%', opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          exit={{ x: '100%', opacity: 0 }}
-          transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-          className="fixed right-0 top-0 h-full w-80 bg-gray-900 text-white shadow-2xl z-40 flex flex-col"
-        >
-          {/* Header */}
-          <div className="p-4 border-b border-gray-700">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <span>🖼️</span>
-              <span>图片操作</span>
-              <span className="text-sm text-gray-400">({selectedImages.length}个)</span>
-            </h2>
-          </div>
+    <>
+      <AnimatePresence>
+        {shouldShow && (
+          <motion.div
+            initial={{ x: '100%', opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+            className="fixed right-0 top-0 h-full w-80 bg-gray-900 text-white shadow-2xl z-40 flex flex-col"
+          >
+            {/* Header */}
+            <div className="p-4 border-b border-gray-700">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <span>🖼️</span>
+                <span>图片操作</span>
+                <span className="text-sm text-gray-400">({selectedImages.length}个)</span>
+              </h2>
+            </div>
 
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {/* Selected Images Preview */}
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium text-gray-300">已选择的图片</h3>
-              <div className="grid grid-cols-3 gap-2">
-                {selectedImages.slice(0, 6).map((img) => (
-                  <div
-                    key={img.id}
-                    className="aspect-square rounded-lg overflow-hidden bg-gray-800 border border-gray-700"
-                  >
-                    <img
-                      src={img.dataUrl}
-                      alt=""
-                      className="w-full h-full object-cover"
-                    />
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {/* Selected Images Preview */}
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium text-gray-300">已选择的图片</h3>
+                <div className="grid grid-cols-3 gap-2">
+                  {selectedImages.slice(0, 6).map((img) => (
+                    <div
+                      key={img.id}
+                      className="aspect-square rounded-lg overflow-hidden bg-gray-800 border border-gray-700"
+                    >
+                      <img
+                        src={img.dataUrl}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  ))}
+                  {selectedImages.length > 6 && (
+                    <div className="aspect-square rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center text-gray-400 text-sm">
+                      +{selectedImages.length - 6}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Image Info */}
+              {selectedImages.length === 1 && (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium text-gray-300">图片信息</h3>
+                  <div className="bg-gray-800 rounded-lg p-3 space-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">尺寸</span>
+                      <span>{formatSize(selectedImages[0].width)} × {formatSize(selectedImages[0].height)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">原始尺寸</span>
+                      <span>{selectedImages[0].originalWidth} × {selectedImages[0].originalHeight}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">旋转角度</span>
+                      <span>{Math.round(selectedImages[0].rotation)}°</span>
+                    </div>
                   </div>
-                ))}
-                {selectedImages.length > 6 && (
-                  <div className="aspect-square rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center text-gray-400 text-sm">
-                    +{selectedImages.length - 6}
-                  </div>
+                </div>
+              )}
+
+              {/* Operations */}
+              <div className="space-y-3">
+                <h3 className="text-sm font-medium text-gray-300">操作</h3>
+
+                {/* Crop Button - Only for single image */}
+                {selectedImages.length === 1 && (
+                  <>
+                    <button
+                      onClick={() => openCropModal(selectedImages[0])}
+                      className="w-full py-3 px-4 rounded-lg font-medium flex items-center justify-center gap-2 transition-all bg-gray-700 hover:bg-gray-600 text-white"
+                    >
+                      <CropIcon />
+                      <span>裁剪图片</span>
+                    </button>
+                    <p className="text-xs text-gray-400 text-center">
+                      自由裁剪或按比例裁剪，生成新图片
+                    </p>
+                  </>
+                )}
+
+                {/* Download Button */}
+                <button
+                  onClick={downloadAllImages}
+                  className="w-full py-3 px-4 rounded-lg font-medium flex items-center justify-center gap-2 transition-all bg-gray-700 hover:bg-gray-600 text-white"
+                >
+                  <DownloadIcon />
+                  <span>下载图片{selectedImages.length > 1 ? ` (${selectedImages.length}张)` : ''}</span>
+                </button>
+                <p className="text-xs text-gray-400 text-center">
+                  按当前尺寸下载图片
+                </p>
+
+                {/* Merge Button */}
+                <button
+                  onClick={mergeImages}
+                  disabled={selectedImages.length < 2}
+                  className={`
+                    w-full py-3 px-4 rounded-lg font-medium flex items-center justify-center gap-2 transition-all
+                    ${selectedImages.length >= 2
+                      ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                      : 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                    }
+                  `}
+                >
+                  <MergeIcon />
+                  <span>合并 Item</span>
+                </button>
+                {selectedImages.length < 2 && (
+                  <p className="text-xs text-gray-500 text-center">
+                    请选择至少2个图片进行合并
+                  </p>
+                )}
+                {selectedImages.length >= 2 && (
+                  <p className="text-xs text-gray-400 text-center">
+                    将 {selectedImages.length} 个图片合并为一个新图片
+                  </p>
                 )}
               </div>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-            {/* Image Info */}
-            {selectedImages.length === 1 && (
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-gray-300">图片信息</h3>
-                <div className="bg-gray-800 rounded-lg p-3 space-y-1 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">尺寸</span>
-                    <span>{formatSize(selectedImages[0].width)} × {formatSize(selectedImages[0].height)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">原始尺寸</span>
-                    <span>{selectedImages[0].originalWidth} × {selectedImages[0].originalHeight}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">旋转角度</span>
-                    <span>{Math.round(selectedImages[0].rotation)}°</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Merge Button */}
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium text-gray-300">操作</h3>
-
-              {/* Download Button */}
-              <button
-                onClick={downloadAllImages}
-                className="w-full py-3 px-4 rounded-lg font-medium flex items-center justify-center gap-2 transition-all bg-gray-700 hover:bg-gray-600 text-white"
-              >
-                <DownloadIcon />
-                <span>下载图片{selectedImages.length > 1 ? ` (${selectedImages.length}张)` : ''}</span>
-              </button>
-              <p className="text-xs text-gray-400 text-center">
-                按当前尺寸下载图片
-              </p>
-
-              {/* Merge Button */}
-              <button
-                onClick={mergeImages}
-                disabled={selectedImages.length < 2}
-                className={`
-                  w-full py-3 px-4 rounded-lg font-medium flex items-center justify-center gap-2 transition-all
-                  ${selectedImages.length >= 2
-                    ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                    : 'bg-gray-800 text-gray-500 cursor-not-allowed'
-                  }
-                `}
-              >
-                <MergeIcon />
-                <span>合并 Item</span>
-              </button>
-              {selectedImages.length < 2 && (
-                <p className="text-xs text-gray-500 text-center">
-                  请选择至少2个图片进行合并
-                </p>
-              )}
-              {selectedImages.length >= 2 && (
-                <p className="text-xs text-gray-400 text-center">
-                  将 {selectedImages.length} 个图片合并为一个新图片
-                </p>
-              )}
-            </div>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+      {/* Crop Modal */}
+      <ImageCropModal
+        isOpen={showCropModal}
+        image={cropImage}
+        onClose={() => {
+          setShowCropModal(false);
+          setCropImage(null);
+        }}
+        onCrop={handleCrop}
+      />
+    </>
   );
 };
 
-// Merge Icon
+// Icons
+const CropIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+  </svg>
+);
+
 const MergeIcon = () => (
   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14" />
@@ -307,7 +364,6 @@ const MergeIcon = () => (
   </svg>
 );
 
-// Download Icon
 const DownloadIcon = () => (
   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />

@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
-import { useBoardStore } from '@/stores';
+import { useBoardStore, useUIStore } from '@/stores';
 import type { CanvasElement, TransformState, ResizeHandle } from '@/types';
 import { isPointInRotatedRect, getAngle, clamp, rotatePoint, getElementCenter, getRotatedBoundingBox } from '@/utils';
 
@@ -33,6 +33,7 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
     updateElement,
     pushHistory,
   } = useBoardStore();
+  const { showTypeLabels } = useUIStore();
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
@@ -394,6 +395,7 @@ export const CanvasBoard: React.FC<CanvasBoardProps> = () => {
             element={element}
             isSelected={selectedIds.includes(element.id)}
             zoom={viewport.zoom}
+            showTypeLabel={showTypeLabels}
           />
         ))}
       </div>
@@ -409,9 +411,10 @@ interface ElementRendererProps {
   element: CanvasElement;
   isSelected: boolean;
   zoom: number;
+  showTypeLabel: boolean;
 }
 
-const ElementRenderer: React.FC<ElementRendererProps> = ({ element, isSelected, zoom }) => {
+const ElementRenderer: React.FC<ElementRendererProps> = ({ element, isSelected, zoom, showTypeLabel }) => {
   const style: React.CSSProperties = {
     position: 'absolute',
     left: element.x,
@@ -460,20 +463,22 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({ element, isSelected, 
       )}
 
       {/* Type label */}
-      <div
-        className="absolute pointer-events-none flex items-center gap-1 bg-black/60 text-white px-1.5 py-0.5 rounded text-xs font-medium backdrop-blur-sm"
-        style={{
-          left: 4 / zoom,
-          top: 4 / zoom,
-          fontSize: 10 / zoom,
-          padding: `${2 / zoom}px ${6 / zoom}px`,
-          borderRadius: 4 / zoom,
-          gap: 2 / zoom,
-        }}
-      >
-        <span>{typeInfo.icon}</span>
-        <span>{typeInfo.label}</span>
-      </div>
+      {showTypeLabel && (
+        <div
+          className="absolute pointer-events-none flex items-center gap-1 bg-black/60 text-white px-1.5 py-0.5 rounded text-xs font-medium backdrop-blur-sm"
+          style={{
+            left: 4 / zoom,
+            top: 4 / zoom,
+            fontSize: 10 / zoom,
+            padding: `${2 / zoom}px ${6 / zoom}px`,
+            borderRadius: 4 / zoom,
+            gap: 2 / zoom,
+          }}
+        >
+          <span>{typeInfo.icon}</span>
+          <span>{typeInfo.label}</span>
+        </div>
+      )}
 
       {/* Selection border and handles */}
       {isSelected && (

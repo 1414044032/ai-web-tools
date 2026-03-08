@@ -26,6 +26,10 @@ interface UIStore {
   toasts: Toast[];
   addToast: (toast: Omit<Toast, 'id'>) => void;
   removeToast: (id: string) => void;
+
+  // Display settings
+  showTypeLabels: boolean;
+  toggleTypeLabels: () => void;
 }
 
 interface Toast {
@@ -66,4 +70,8 @@ export const useUIStore = create<UIStore>((set) => ({
     set((state) => ({
       toasts: state.toasts.filter((t) => t.id !== id),
     })),
+
+  // Display settings
+  showTypeLabels: true,
+  toggleTypeLabels: () => set((state) => ({ showTypeLabels: !state.showTypeLabels })),
 }));
