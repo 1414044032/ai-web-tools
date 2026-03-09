@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useBoardStore, useUIStore } from '@/stores';
 import { getRotatedBoundingBox } from '@/utils';
@@ -6,12 +6,19 @@ import { ImageCropModal } from './ImageCropModal';
 import type { ImageElement } from '@/types';
 
 export const ImageSidePanel: React.FC = () => {
-  const { selectedIds, elements, addImage } = useBoardStore();
+  const { selectedIds, elements, addImage, bringToFront, sendToBack, bringForward, sendBackward } = useBoardStore();
   const { addToast, setLoading } = useUIStore();
 
   // Crop modal state
   const [showCropModal, setShowCropModal] = useState(false);
   const [cropImage, setCropImage] = useState<ImageElement | null>(null);
+
+  // Remove white background state
+  const [whiteTolerance, setWhiteTolerance] = useState(30);
+  const [removeBgPreview, setRemoveBgPreview] = useState<string | null>(null);
+  const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
+  const previewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 
   // Get selected image elements
   const selectedImages = selectedIds
@@ -26,6 +33,79 @@ export const ImageSidePanel: React.FC = () => {
 
   // Don't show if videos are selected (VideoSidePanel handles that)
   const shouldShow = hasSelectedImages && !hasSelectedVideos;
+
+  // Generate preview for remove white background (debounced)
+  useEffect(() => {
+    if (selectedImages.length !== 1) {
+      setRemoveBgPreview(null);
+      return;
+    }
+
+    const img = selectedImages[0];
+
+    // Clear previous timeout
+    if (previewTimeoutRef.current) {
+      clearTimeout(previewTimeoutRef.current);
+    }
+
+    // Debounce preview generation
+    previewTimeoutRef.current = setTimeout(async () => {
+      setIsGeneratingPreview(true);
+      try {
+        // Create a smaller canvas for preview (max 200px)
+        const maxPreviewSize = 200;
+        const scale = Math.min(maxPreviewSize / img.width, maxPreviewSize / img.height, 1);
+        const previewWidth = Math.round(img.width * scale);
+        const previewHeight = Math.round(img.height * scale);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = previewWidth;
+        canvas.height = previewHeight;
+        const ctx = canvas.getContext('2d');
+
+        if (!ctx) return;
+
+        // Load and draw image
+        await new Promise<void>((resolve, reject) => {
+          const image = new Image();
+          image.onload = () => {
+            ctx.drawImage(image, 0, 0, previewWidth, previewHeight);
+            resolve();
+          };
+          image.onerror = reject;
+          image.src = img.dataUrl;
+        });
+
+        // Process pixels
+        const imageData = ctx.getImageData(0, 0, previewWidth, previewHeight);
+        const data = imageData.data;
+        const threshold = 255 - whiteTolerance;
+
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+
+          if (r >= threshold && g >= threshold && b >= threshold) {
+            data[i + 3] = 0;
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        setRemoveBgPreview(canvas.toDataURL('image/png'));
+      } catch (error) {
+        console.error('Failed to generate preview:', error);
+      } finally {
+        setIsGeneratingPreview(false);
+      }
+    }, 150); // 150ms debounce
+
+    return () => {
+      if (previewTimeoutRef.current) {
+        clearTimeout(previewTimeoutRef.current);
+      }
+    };
+  }, [selectedImages, whiteTolerance]);
 
   // Open crop modal
   const openCropModal = useCallback((img: ImageElement) => {
@@ -204,6 +284,73 @@ export const ImageSidePanel: React.FC = () => {
     }
   }, [selectedImages, downloadImage]);
 
+  // Remove white background from image
+  const removeWhiteBackground = useCallback(async (img: ImageElement) => {
+    try {
+      setLoading(true, '正在去除白色背景...');
+
+      // Create canvas
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width);
+      canvas.height = Math.round(img.height);
+      const ctx = canvas.getContext('2d');
+
+      if (!ctx) {
+        throw new Error('Failed to get canvas context');
+      }
+
+      // Load image
+      await new Promise<void>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => {
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          resolve();
+        };
+        image.onerror = reject;
+        image.src = img.dataUrl;
+      });
+
+      // Get pixel data
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+
+      // Process each pixel
+      const tolerance = whiteTolerance;
+      const threshold = 255 - tolerance;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+
+        // Check if pixel is close to white
+        if (r >= threshold && g >= threshold && b >= threshold) {
+          // Make it transparent
+          data[i + 3] = 0; // Set alpha to 0
+        }
+      }
+
+      // Put processed data back
+      ctx.putImageData(imageData, 0, 0);
+
+      // Generate new image
+      const dataUrl = canvas.toDataURL('image/png');
+
+      // Add as new element
+      const element = addImage(dataUrl, canvas.width, canvas.height, undefined, img);
+
+      if (element) {
+        useBoardStore.getState().setSelectedIds([element.id]);
+        addToast({ type: 'success', message: '白色背景已去除，生成新图片' });
+      }
+    } catch (error) {
+      console.error('Failed to remove white background:', error);
+      addToast({ type: 'error', message: '去除白色背景失败' });
+    } finally {
+      setLoading(false);
+    }
+  }, [whiteTolerance, addImage, addToast, setLoading]);
+
   const formatSize = (size: number) => Math.round(size);
 
   return (
@@ -293,6 +440,68 @@ export const ImageSidePanel: React.FC = () => {
                   </>
                 )}
 
+                {/* Remove White Background - Only for single image */}
+                {selectedImages.length === 1 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-300">白色容差</span>
+                      <span className="text-sm text-gray-400">{whiteTolerance}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="80"
+                      value={whiteTolerance}
+                      onChange={(e) => setWhiteTolerance(Number(e.target.value))}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
+
+                    {/* Preview */}
+                    <div className="relative">
+                      <div className="text-xs text-gray-400 mb-2">预览效果：</div>
+                      <div
+                        className="relative rounded-lg overflow-hidden border border-gray-700"
+                        style={{
+                          backgroundImage: 'linear-gradient(45deg, #374151 25%, transparent 25%), linear-gradient(-45deg, #374151 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #374151 75%), linear-gradient(-45deg, transparent 75%, #374151 75%)',
+                          backgroundSize: '16px 16px',
+                          backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
+                          backgroundColor: '#1f2937',
+                        }}
+                      >
+                        {isGeneratingPreview ? (
+                          <div className="flex items-center justify-center h-32 text-gray-400 text-sm">
+                            <span className="animate-pulse">生成预览中...</span>
+                          </div>
+                        ) : removeBgPreview ? (
+                          <img
+                            src={removeBgPreview}
+                            alt="去白底预览"
+                            className="w-full h-auto max-h-40 object-contain mx-auto"
+                          />
+                        ) : (
+                          <div className="flex items-center justify-center h-32 text-gray-500 text-sm">
+                            等待预览...
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1 text-center">
+                        棋盘格区域表示透明
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => removeWhiteBackground(selectedImages[0])}
+                      className="w-full py-3 px-4 rounded-lg font-medium flex items-center justify-center gap-2 transition-all bg-gray-700 hover:bg-gray-600 text-white"
+                    >
+                      <RemoveBgIcon />
+                      <span>确认去除白底</span>
+                    </button>
+                    <p className="text-xs text-gray-400 text-center">
+                      生成新图片，保留原图
+                    </p>
+                  </div>
+                )}
+
                 {/* Download Button */}
                 <button
                   onClick={downloadAllImages}
@@ -331,6 +540,46 @@ export const ImageSidePanel: React.FC = () => {
                   </p>
                 )}
               </div>
+
+              {/* Layer Operations - Only for single image */}
+              {selectedImages.length === 1 && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-medium text-gray-300">图层顺序</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => bringToFront(selectedImages[0].id)}
+                      className="py-2 px-3 rounded-lg font-medium flex items-center justify-center gap-1.5 transition-all bg-gray-700 hover:bg-gray-600 text-white text-sm"
+                    >
+                      <BringToFrontIcon />
+                      <span>置顶</span>
+                    </button>
+                    <button
+                      onClick={() => sendToBack(selectedImages[0].id)}
+                      className="py-2 px-3 rounded-lg font-medium flex items-center justify-center gap-1.5 transition-all bg-gray-700 hover:bg-gray-600 text-white text-sm"
+                    >
+                      <SendToBackIcon />
+                      <span>置底</span>
+                    </button>
+                    <button
+                      onClick={() => bringForward(selectedImages[0].id)}
+                      className="py-2 px-3 rounded-lg font-medium flex items-center justify-center gap-1.5 transition-all bg-gray-700 hover:bg-gray-600 text-white text-sm"
+                    >
+                      <BringForwardIcon />
+                      <span>上移一层</span>
+                    </button>
+                    <button
+                      onClick={() => sendBackward(selectedImages[0].id)}
+                      className="py-2 px-3 rounded-lg font-medium flex items-center justify-center gap-1.5 transition-all bg-gray-700 hover:bg-gray-600 text-white text-sm"
+                    >
+                      <SendBackwardIcon />
+                      <span>下移一层</span>
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-400 text-center">
+                    调整图片在画布中的堆叠顺序
+                  </p>
+                </div>
+              )}
             </div>
           </motion.div>
         )}
@@ -367,6 +616,37 @@ const MergeIcon = () => (
 const DownloadIcon = () => (
   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+  </svg>
+);
+
+// Layer operation icons
+const BringToFrontIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 11l7-7 7 7M5 19l7-7 7 7" />
+  </svg>
+);
+
+const SendToBackIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 13l-7 7-7-7m14-8l-7 7-7-7" />
+  </svg>
+);
+
+const BringForwardIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+  </svg>
+);
+
+const SendBackwardIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+  </svg>
+);
+
+const RemoveBgIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
   </svg>
 );
 

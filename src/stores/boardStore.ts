@@ -109,6 +109,8 @@ interface BoardStore {
   getElementByIndex: (id: string) => number;
   bringToFront: (id: string) => void;
   sendToBack: (id: string) => void;
+  bringForward: (id: string) => void;
+  sendBackward: (id: string) => void;
 }
 
 const DEFAULT_VIEWPORT: Viewport = {
@@ -390,5 +392,39 @@ export const useBoardStore = create<BoardStore>((set, get) => ({
     const { elements } = get();
     const minZIndex = Math.min(...elements.map((e) => e.zIndex));
     get().updateElement(id, { zIndex: minZIndex - 1 });
+  },
+
+  bringForward: (id) => {
+    const { elements } = get();
+    const element = elements.find((e) => e.id === id);
+    if (!element) return;
+
+    // Find the element with the next higher zIndex
+    const sortedByZ = [...elements].sort((a, b) => a.zIndex - b.zIndex);
+    const currentIndex = sortedByZ.findIndex((e) => e.id === id);
+
+    if (currentIndex < sortedByZ.length - 1) {
+      const nextElement = sortedByZ[currentIndex + 1];
+      // Swap zIndex values
+      get().updateElement(id, { zIndex: nextElement.zIndex });
+      get().updateElement(nextElement.id, { zIndex: element.zIndex });
+    }
+  },
+
+  sendBackward: (id) => {
+    const { elements } = get();
+    const element = elements.find((e) => e.id === id);
+    if (!element) return;
+
+    // Find the element with the next lower zIndex
+    const sortedByZ = [...elements].sort((a, b) => a.zIndex - b.zIndex);
+    const currentIndex = sortedByZ.findIndex((e) => e.id === id);
+
+    if (currentIndex > 0) {
+      const prevElement = sortedByZ[currentIndex - 1];
+      // Swap zIndex values
+      get().updateElement(id, { zIndex: prevElement.zIndex });
+      get().updateElement(prevElement.id, { zIndex: element.zIndex });
+    }
   },
 }));
